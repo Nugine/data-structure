@@ -173,6 +173,25 @@ impl<T> LinkedList<T> {
             _marker: PhantomData,
         }
     }
+
+    pub fn front(&self) -> Option<&T> {
+        if self.len == 0 {
+            None
+        } else {
+            unsafe { Some(&self.head.as_ref().elem) }
+        }
+    }
+
+    pub fn back(&self) -> Option<&T> {
+        if self.len == 0 {
+            None
+        } else {
+            unsafe {
+                let tail = self.head.as_ref().prev;
+                Some(&(*tail.as_ptr()).elem)
+            }
+        }
+    }
 }
 
 impl<T> Drop for LinkedList<T> {
