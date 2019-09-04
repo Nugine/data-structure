@@ -1,13 +1,12 @@
-use std::alloc::Layout;
+use crate::raw::RawArray;
+
 use std::iter::FusedIterator;
-use std::mem::{align_of, size_of};
 use std::ops::{Deref, DerefMut, Index, IndexMut};
-use std::ptr::NonNull;
+use std::ptr::{drop_in_place, NonNull};
 
 pub struct SequenceList<T> {
-    arr: NonNull<T>,
+    raw: RawArray<T>,
     len: usize,
-    cap: usize,
     // invariant: len <= cap <= isize::max_value()
 }
 
@@ -15,49 +14,11 @@ unsafe impl<T: Send> Send for SequenceList<T> {}
 unsafe impl<T: Sync> Sync for SequenceList<T> {}
 
 impl<T> SequenceList<T> {
-    unsafe fn offset(&self, offset: isize) -> *mut T {
-        self.arr.as_ptr().offset(offset)
-    }
-}
-
-impl<T> SequenceList<T> {
     pub fn new(capacity: usize) -> Self {
-        assert!(size_of::<T>() != 0);
-
-        if capacity == 0 {
-            return Self {
-                arr: NonNull::dangling(),
-                len: 0,
-                cap: 0,
-            };
-        }
-
-        let alloc_size = capacity
-            .checked_mul(size_of::<T>())
-            .and_then(|size| {
-                if size > isize::max_value() as usize {
-                    None
-                } else {
-                    Some(size)
-                }
-            })
-            .expect("capacity overflow");
-        let layout = Layout::from_size_align(alloc_size, align_of::<T>()).expect("layout error");
-
-        let arr = unsafe {
-            let ptr = std::alloc::alloc(layout.clone()) as *mut T;
-            if ptr.is_null() {
-                std::alloc::handle_alloc_error(layout);
-            }
-            NonNull::new_unchecked(ptr)
-        };
-
-        Self {
-            arr,
-            len: 0,
-            cap: capacity,
-        }
+        let raw = unsafe { RawArray::alloc(capacity) };
+        Self { raw, len: 0 }
     }
+
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -67,14 +28,15 @@ impl<T> SequenceList<T> {
     }
 
     pub fn capacity(&self) -> usize {
-        self.cap
+        self.raw.cap
     }
+
     pub fn push(&mut self, elem: T) {
-        if self.len == self.cap {
+        if self.len == self.raw.cap {
             panic!("sequence list is full")
         }
 
-        unsafe { self.offset(self.len as isize).write(elem) };
+        unsafe { self.raw.offset(self.len).write(elem) };
         self.len += 1;
     }
 
@@ -84,13 +46,13 @@ impl<T> SequenceList<T> {
         }
 
         self.len -= 1;
-        Some(unsafe { self.offset(self.len as isize).read() })
+        Some(unsafe { self.raw.offset(self.len).read() })
     }
 
     pub fn clear(&mut self) {
         let len = self.len;
         self.len = 0;
-        unsafe { std::ptr::drop_in_place(std::slice::from_raw_parts_mut(self.arr.as_ptr(), len)) };
+        unsafe { drop_in_place(std::slice::from_raw_parts_mut(self.raw.arr.as_ptr(), len)) };
     }
 
     pub fn insert(&mut self, index: usize, elem: T) {
@@ -99,7 +61,7 @@ impl<T> SequenceList<T> {
         }
         let count = self.len - index;
         unsafe {
-            let src = self.offset(index as isize);
+            let src = self.raw.offset(index);
             let dst = src.offset(1);
             std::ptr::copy(src, dst, count);
             src.write(elem);
@@ -113,7 +75,7 @@ impl<T> SequenceList<T> {
         }
         let count = self.len - 1 - index;
         unsafe {
-            let dst = self.offset(index as isize);
+            let dst = self.raw.offset(index);
             let elem = dst.read();
             let src = dst.offset(1);
             std::ptr::copy(src, dst, count);
@@ -126,10 +88,8 @@ impl<T> SequenceList<T> {
 impl<T> Drop for SequenceList<T> {
     fn drop(&mut self) {
         unsafe {
-            std::ptr::drop_in_place(self.deref_mut());
-            let layout =
-                Layout::from_size_align_unchecked(self.cap * size_of::<T>(), align_of::<T>());
-            std::alloc::dealloc(self.arr.as_ptr() as *mut u8, layout)
+            drop_in_place(self.deref_mut());
+            self.raw.dealloc();
         }
     }
 }
@@ -137,13 +97,13 @@ impl<T> Drop for SequenceList<T> {
 impl<T> Deref for SequenceList<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
-        unsafe { std::slice::from_raw_parts(self.arr.as_ptr(), self.len) }
+        unsafe { std::slice::from_raw_parts(self.raw.arr.as_ptr(), self.len) }
     }
 }
 
 impl<T> DerefMut for SequenceList<T> {
     fn deref_mut(&mut self) -> &mut [T] {
-        unsafe { std::slice::from_raw_parts_mut(self.arr.as_ptr(), self.len) }
+        unsafe { std::slice::from_raw_parts_mut(self.raw.arr.as_ptr(), self.len) }
     }
 }
 
@@ -154,7 +114,7 @@ impl<T> Index<usize> for SequenceList<T> {
             panic!("index out of bounds")
         }
 
-        unsafe { &*self.offset(idx as isize) }
+        unsafe { &*self.raw.offset(idx) }
     }
 }
 
@@ -163,27 +123,24 @@ impl<T> IndexMut<usize> for SequenceList<T> {
         if idx >= self.len {
             panic!("index out of bounds")
         }
-        unsafe { &mut *self.offset(idx as isize) }
+        unsafe { &mut *self.raw.offset(idx) }
     }
 }
 
 // ----------------------------------------
 // begin: IterOwned
 pub struct IterOwned<T> {
-    arr: NonNull<T>,
+    raw: RawArray<T>,
     head: NonNull<T>,
     tail: NonNull<T>,
     len: usize,
-    cap: usize,
 }
 
 impl<T> Drop for IterOwned<T> {
     fn drop(&mut self) {
         unsafe {
-            std::ptr::drop_in_place(std::slice::from_raw_parts_mut(self.head.as_ptr(), self.len));
-            let layout =
-                Layout::from_size_align_unchecked(self.cap * size_of::<T>(), align_of::<T>());
-            std::alloc::dealloc(self.arr.as_ptr() as *mut u8, layout);
+            drop_in_place(std::slice::from_raw_parts_mut(self.head.as_ptr(), self.len));
+            self.raw.dealloc()
         }
     }
 }
@@ -192,12 +149,16 @@ impl<T> IntoIterator for SequenceList<T> {
     type Item = T;
     type IntoIter = IterOwned<T>;
     fn into_iter(self) -> IterOwned<T> {
+        let arr = self.raw.arr;
+        let cap = self.raw.cap;
+        let len = self.len;
+        std::mem::forget(self);
+
         IterOwned {
-            arr: self.arr,
-            head: self.arr,
-            tail: unsafe { NonNull::new_unchecked(self.offset(self.len as isize)) },
-            len: self.len,
-            cap: self.cap,
+            raw: RawArray { arr, cap },
+            head: arr,
+            tail: unsafe { NonNull::new_unchecked(arr.as_ptr().offset(len as isize)) },
+            len,
         }
     }
 }
@@ -277,13 +238,14 @@ mod test {
         list.insert(1, Foo(3));
         assert_eq!(list[1].0, 3);
         assert_eq!(list[2].0, 2);
+        // [1, 3, 2]
 
-        assert_eq!(list.remove(1).0, 3);
-        assert_eq!(list.pop().unwrap().0, 2);
+        assert_eq!(list.remove(1).0, 3); // drop 3
+        assert_eq!(list.pop().unwrap().0, 2); // drop 2
 
-        list.clear();
+        list.clear(); // drop [1]
         list.push(Foo(3));
 
-        drop(list);
+        drop(list); // drop [3]
     }
 }
