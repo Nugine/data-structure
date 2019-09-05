@@ -88,7 +88,7 @@ impl<T> SequenceList<T> {
 impl<T> Drop for SequenceList<T> {
     fn drop(&mut self) {
         unsafe {
-            drop_in_place(self.deref_mut());
+            drop_in_place(self.raw.as_slice_mut());
             self.raw.dealloc();
         }
     }
@@ -97,13 +97,13 @@ impl<T> Drop for SequenceList<T> {
 impl<T> Deref for SequenceList<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
-        unsafe { std::slice::from_raw_parts(self.raw.arr.as_ptr(), self.len) }
+        unsafe { self.raw.as_slice() }
     }
 }
 
 impl<T> DerefMut for SequenceList<T> {
     fn deref_mut(&mut self) -> &mut [T] {
-        unsafe { std::slice::from_raw_parts_mut(self.raw.arr.as_ptr(), self.len) }
+        unsafe { self.raw.as_slice_mut() }
     }
 }
 
@@ -149,15 +149,14 @@ impl<T> IntoIterator for SequenceList<T> {
     type Item = T;
     type IntoIter = IterOwned<T>;
     fn into_iter(self) -> IterOwned<T> {
-        let arr = self.raw.arr;
-        let cap = self.raw.cap;
+        let raw = unsafe{ self.raw.shadow_clone() };
         let len = self.len;
         std::mem::forget(self);
 
         IterOwned {
-            raw: RawArray { arr, cap },
-            head: arr,
-            tail: unsafe { NonNull::new_unchecked(arr.as_ptr().offset(len as isize)) },
+            head: raw.arr,
+            tail: unsafe { NonNull::new_unchecked(raw.arr.as_ptr().offset(len as isize)) },
+            raw,
             len,
         }
     }

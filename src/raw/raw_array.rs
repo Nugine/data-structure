@@ -53,4 +53,19 @@ impl<T> RawArray<T> {
     pub unsafe fn offset(&self, index: usize)->*mut T{
         self.arr.as_ptr().offset(index as isize)
     }
+
+    pub unsafe fn shadow_clone(&self)->Self{
+        Self{
+            arr: self.arr,
+            cap: self.cap
+        }
+    }
+
+    pub unsafe fn as_slice_mut(&mut self)->&mut [T]{
+        std::slice::from_raw_parts_mut(self.arr.as_ptr(), self.cap)
+    }
+
+    pub unsafe fn as_slice(&self)->&[T]{
+        std::slice::from_raw_parts(self.arr.as_ptr(), self.cap)
+    }
 }

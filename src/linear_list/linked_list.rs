@@ -154,22 +154,14 @@ impl<T> LinkedList<T> {
 
     pub fn iter_mut(&mut self) -> IterMut<T> {
         IterMut {
-            iter: RawNodeIter {
-                head: self.head,
-                tail: self.head,
-                len: self.len,
-            },
+            iter: RawNodeIter::from_linked_list(self),
             _marker: PhantomData,
         }
     }
 
     pub fn iter(&self) -> Iter<T> {
         Iter {
-            iter: RawNodeIter {
-                head: self.head,
-                tail: self.head,
-                len: self.len,
-            },
+            iter: RawNodeIter::from_linked_list(self),
             _marker: PhantomData,
         }
     }
@@ -284,6 +276,19 @@ struct RawNodeIter<T> {
 }
 
 impl<T> RawNodeIter<T> {
+    fn from_linked_list(ll: &LinkedList<T>)->Self{
+        let tail = if ll.is_empty(){
+            NonNull::dangling()
+        }else{
+            unsafe{ ll.head.as_ref().prev}
+        };
+        Self{
+            head: ll.head,
+            tail,
+            len: ll.len
+        }
+    }
+
     fn next_front(&mut self) -> Option<NonNull<Node<T>>> {
         match self.len {
             0 => None,
