@@ -214,6 +214,8 @@ where
                 let prev_ptr = ptr;
                 Node::insert(elem, prev_ptr, next_ptr);
             }
+
+            self.len += 1;
         }
     }
 }
@@ -276,16 +278,16 @@ struct RawNodeIter<T> {
 }
 
 impl<T> RawNodeIter<T> {
-    fn from_linked_list(ll: &LinkedList<T>)->Self{
-        let tail = if ll.is_empty(){
+    fn from_linked_list(ll: &LinkedList<T>) -> Self {
+        let tail = if ll.is_empty() {
             NonNull::dangling()
-        }else{
-            unsafe{ ll.head.as_ref().prev}
+        } else {
+            unsafe { ll.head.as_ref().prev }
         };
-        Self{
+        Self {
             head: ll.head,
             tail,
-            len: ll.len
+            len: ll.len,
         }
     }
 
